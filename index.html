@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>King County Cities Explorer</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0b1a2e;
+  --panel-bg: rgba(11, 22, 42, 0.94);
+  --card-bg: rgba(18, 35, 62, 0.7);
+  --border: rgba(100, 160, 220, 0.15);
+  --border-hi: rgba(100, 180, 255, 0.4);
+  --t1: #e8f0fa;
+  --t2: #8aa4c4;
+  --t3: #5a7a9e;
+  --blue: #4a9eff;
+  --teal: #3dd6c8;
+  --gold: #f0c850;
+  --rose: #ff6b8a;
+  --violet: #a78bfa;
+  --glow: 0 0 30px rgba(74,158,255,0.15);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--t1);overflow:hidden;height:100vh;width:100vw}
+
+/* === MAP CANVAS === */
+#map-canvas{position:absolute;inset:0;overflow:hidden;cursor:grab}
+#map-canvas.grabbing{cursor:grabbing}
+#map-inner{position:absolute;transform-origin:0 0;will-change:transform}
+
+/* County fill + water features */
+.county-fill{fill:rgba(16,40,72,0.6);stroke:rgba(80,150,220,0.25);stroke-width:1.5}
+.water{fill:rgba(20,60,110,0.5);stroke:none}
+.road{stroke:rgba(80,140,200,0.08);stroke-width:0.5;fill:none}
+
+/* Subtle grid */
+#map-canvas::after{content:'';position:absolute;inset:0;background-image:linear-gradient(rgba(74,158,255,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(74,158,255,0.025) 1px,transparent 1px);background-size:50px 50px;pointer-events:none;z-index:1}
+
+/* === MARKERS === */
+.marker{position:absolute;transform:translate(-50%,-50%);z-index:10;cursor:pointer;transition:transform 0.15s,z-index 0s}
+.marker:hover{transform:translate(-50%,-50%) scale(1.35);z-index:20}
+.marker.active{transform:translate(-50%,-50%) scale(1.4);z-index:25}
+.marker-dot{border-radius:50%;position:relative;box-shadow:0 0 10px rgba(0,0,0,0.4);transition:box-shadow 0.2s;border:1.5px solid rgba(255,255,255,0.4)}
+.marker:hover .marker-dot,.marker.active .marker-dot{box-shadow:0 0 20px rgba(74,158,255,0.6)}
+.marker-pulse{position:absolute;inset:-4px;border-radius:50%;border:1px solid rgba(74,158,255,0.25);animation:pulse 3s ease-in-out infinite;pointer-events:none}
+@keyframes pulse{0%,100%{transform:scale(1);opacity:0.4}50%{transform:scale(2);opacity:0}}
+.marker-label{position:absolute;top:calc(100% + 3px);left:50%;transform:translateX(-50%);font-size:10px;font-weight:500;color:var(--t2);white-space:nowrap;pointer-events:none;opacity:0;transition:opacity 0.15s;text-shadow:0 1px 5px rgba(0,0,0,0.9)}
+.marker:hover .marker-label,.marker.active .marker-label{opacity:1}
+.label-always{opacity:0.7}
+
+.sz-xs .marker-dot{width:6px;height:6px;background:var(--blue)}
+.sz-sm .marker-dot{width:8px;height:8px;background:var(--blue)}
+.sz-md .marker-dot{width:12px;height:12px;background:var(--teal)}
+.sz-lg .marker-dot{width:16px;height:16px;background:var(--gold)}
+.sz-xl .marker-dot{width:22px;height:22px;background:var(--rose)}
+
+@keyframes markerIn{from{opacity:0;transform:translate(-50%,-50%) scale(0.3)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+.marker{animation:markerIn 0.4s ease backwards}
+
+/* === HOVER CARD (appears on mouseover) === */
+#hover-card{position:fixed;background:var(--panel-bg);backdrop-filter:blur(16px);border:1px solid var(--border-hi);border-radius:10px;padding:14px 18px;pointer-events:none;z-index:200;opacity:0;transition:opacity 0.12s;max-width:300px;box-shadow:0 4px 24px rgba(0,0,0,0.4)}
+#hover-card.show{opacity:1}
+.hc-name{font-family:'Instrument Serif',serif;font-size:18px;margin-bottom:6px}
+.hc-row{display:flex;justify-content:space-between;gap:12px;font-size:11px;padding:2px 0}
+.hc-label{color:var(--t3)}
+.hc-val{color:var(--t1);font-weight:500;text-align:right}
+.hc-bar{height:5px;border-radius:3px;display:flex;overflow:hidden;margin:6px 0 2px}
+.hc-seg{transition:width 0.3s}
+.hc-legend{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
+.hc-legend span{font-size:9px;color:var(--t3);display:flex;align-items:center;gap:3px}
+.hc-legend i{width:6px;height:6px;border-radius:1px;display:inline-block}
+
+/* === HEADER === */
+#header{position:fixed;top:0;left:0;right:0;height:54px;background:linear-gradient(180deg,rgba(11,26,46,0.96),rgba(11,26,46,0.8) 80%,transparent);display:flex;align-items:center;padding:0 24px;z-index:100;gap:16px}
+#header h1{font-family:'Instrument Serif',serif;font-size:21px;font-weight:400}
+#header .sub{font-size:11px;color:var(--t3);letter-spacing:0.05em;text-transform:uppercase}
+.spacer{flex:1}
+
+/* === TOOLBAR === */
+#toolbar{position:fixed;top:54px;left:0;right:0;height:38px;background:rgba(11,26,46,0.75);backdrop-filter:blur(10px);display:flex;align-items:center;padding:0 24px;gap:10px;z-index:99;border-bottom:1px solid var(--border)}
+.tg{display:flex;gap:2px;background:rgba(255,255,255,0.05);border-radius:6px;padding:2px;border:1px solid var(--border)}
+.tg-label{font-size:9px;text-transform:uppercase;letter-spacing:0.06em;color:var(--t3);padding:3px 6px;display:flex;align-items:center}
+.tg-btn{background:transparent;border:none;border-radius:4px;padding:3px 10px;color:var(--t3);font-family:'DM Sans',sans-serif;font-size:11px;cursor:pointer;transition:all 0.15s;white-space:nowrap}
+.tg-btn.active{background:rgba(74,158,255,0.18);color:var(--blue)}
+.tg-btn:hover:not(.active){color:var(--t2)}
+
+/* === SEARCH === */
+#search-box{position:relative}
+#search-in{background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:7px;padding:6px 12px 6px 30px;color:var(--t1);font-family:'DM Sans',sans-serif;font-size:12px;width:200px;outline:none;transition:border-color 0.2s,width 0.2s}
+#search-in:focus{border-color:var(--border-hi);width:260px}
+#search-in::placeholder{color:var(--t3)}
+#search-ico{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--t3);font-size:13px;pointer-events:none}
+#search-list{position:absolute;top:calc(100% + 4px);left:0;right:0;background:var(--panel-bg);border:1px solid var(--border);border-radius:7px;max-height:240px;overflow-y:auto;display:none;backdrop-filter:blur(16px);z-index:110}
+#search-list.vis{display:block}
+.sr-item{padding:7px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid rgba(255,255,255,0.03);transition:background 0.12s}
+.sr-item:hover{background:rgba(74,158,255,0.1)}
+.sr-city{color:var(--t1)}
+.sr-meta{color:var(--t3);font-size:10px;margin-left:6px}
+
+/* === INFO PANEL (click) === */
+#panel{position:fixed;top:92px;right:-430px;width:410px;bottom:14px;background:var(--panel-bg);backdrop-filter:blur(20px);border:1px solid var(--border);border-radius:14px;z-index:90;transition:right 0.35s cubic-bezier(0.16,1,0.3,1);overflow-y:auto;overflow-x:hidden;box-shadow:var(--glow);margin-right:14px}
+#panel.open{right:0}
+#panel::-webkit-scrollbar{width:4px}
+#panel::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:2px}
+.p-close{position:sticky;top:0;z-index:5;display:flex;justify-content:flex-end;padding:10px 14px 0;background:linear-gradient(180deg,var(--panel-bg) 60%,transparent)}
+.p-close button{background:rgba(255,255,255,0.07);border:none;color:var(--t2);width:26px;height:26px;border-radius:5px;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center}
+.p-close button:hover{background:rgba(255,255,255,0.13)}
+.p-head{padding:2px 22px 14px}
+.p-head h2{font-family:'Instrument Serif',serif;font-size:26px;font-weight:400;line-height:1.2;margin-bottom:3px}
+.p-head .p-sub{font-size:10px;color:var(--t3);letter-spacing:0.08em;text-transform:uppercase}
+.p-sec{padding:14px 22px;border-top:1px solid var(--border)}
+.p-sec-t{font-size:9px;text-transform:uppercase;letter-spacing:0.12em;color:var(--t3);margin-bottom:8px}
+.sg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.si{background:rgba(255,255,255,0.025);border-radius:7px;padding:9px 11px;border:1px solid rgba(255,255,255,0.03)}
+.si-l{font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:2px}
+.si-v{font-size:15px;font-weight:600}
+.si-v.c-blue{color:var(--blue)}.si-v.c-teal{color:var(--teal)}.si-v.c-gold{color:var(--gold)}.si-v.c-rose{color:var(--rose)}
+.db{display:flex;height:7px;border-radius:4px;overflow:hidden;margin-bottom:6px}
+.db-s{transition:width 0.3s}
+.dl{display:flex;flex-wrap:wrap;gap:6px 12px}
+.dl-i{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)}
+.dl-d{width:7px;height:7px;border-radius:2px}
+.ir{display:flex;justify-content:space-between;align-items:flex-start;padding:5px 0;gap:10px}
+.ir-l{font-size:11px;color:var(--t3);flex-shrink:0}
+.ir-v{font-size:11px;color:var(--t1);text-align:right}
+.nt{font-size:11px;color:var(--t2);line-height:1.55}
+.wl{display:inline-block;margin-top:6px;color:var(--blue);font-size:11px;text-decoration:none;border-bottom:1px solid transparent;transition:border-color 0.15s}
+.wl:hover{border-color:var(--blue)}
+
+/* === LEGEND === */
+#legend{position:fixed;bottom:14px;left:14px;background:var(--panel-bg);backdrop-filter:blur(14px);border:1px solid var(--border);border-radius:9px;padding:10px 14px;z-index:80;min-width:170px}
+#legend h4{font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:var(--t3);margin-bottom:6px}
+.lg-i{display:flex;align-items:center;gap:7px;margin-bottom:3px;font-size:10px;color:var(--t2)}
+.lg-d{border-radius:50%;flex-shrink:0;border:1.5px solid rgba(255,255,255,0.35)}
+
+/* === ZOOM === */
+#zoom{position:fixed;bottom:14px;right:14px;display:flex;flex-direction:column;gap:3px;z-index:80}
+.zb{background:var(--panel-bg);backdrop-filter:blur(14px);border:1px solid var(--border);border-radius:7px;width:34px;height:34px;color:var(--t2);font-size:17px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s}
+.zb:hover{background:rgba(74,158,255,0.1);border-color:var(--border-hi);color:var(--t1)}
+
+/* === FOOTER STATS === */
+#footer{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:var(--panel-bg);backdrop-filter:blur(14px);border:1px solid var(--border);border-radius:9px;padding:6px 18px;z-index:80;display:flex;gap:20px;font-size:10px}
+.fl{color:var(--t3);margin-right:4px}
+.fv{color:var(--teal);font-weight:600}
+
+@media(max-width:768px){
+  #panel{width:calc(100vw - 28px);right:-100vw}
+  #panel.open{right:0}
+  #search-in{width:130px}
+  #search-in:focus{width:170px}
+  #footer{display:none}
+  #legend{bottom:auto;top:96px;left:6px}
+  #toolbar{overflow-x:auto}
+}
+</style>
+</head>
+<body>
+<div id="map-canvas"><div id="map-inner"></div></div>
+
+<div id="hover-card">
+  <div class="hc-name"></div>
+  <div class="hc-body"></div>
+</div>
+
+<div id="header">
+  <h1>King County Cities</h1>
+  <span class="sub">39 Incorporated Cities &middot; Interactive Explorer</span>
+  <div class="spacer"></div>
+  <div id="search-box">
+    <span id="search-ico">&#x1F50D;</span>
+    <input id="search-in" type="text" placeholder="Search cities..." autocomplete="off">
+    <div id="search-list"></div>
+  </div>
+</div>
+
+<div id="toolbar">
+  <div class="tg" id="gov-tg">
+    <span class="tg-label">Gov</span>
+    <button class="tg-btn active" data-gov="all">All</button>
+    <button class="tg-btn" data-gov="strong-mayor">Strong Mayor</button>
+    <button class="tg-btn" data-gov="council-manager">Council-Mgr</button>
+    <button class="tg-btn" data-gov="mayor-council">Mayor-Council</button>
+  </div>
+</div>
+
+<div id="panel">
+  <div class="p-close"><button id="p-close-btn">&times;</button></div>
+  <div id="p-content"></div>
+</div>
+
+<div id="legend">
+  <h4>Population</h4>
+  <div class="lg-i"><span class="lg-d" style="width:22px;height:22px;background:var(--rose)"></span>100,000+</div>
+  <div class="lg-i"><span class="lg-d" style="width:16px;height:16px;background:var(--gold)"></span>25k&ndash;100k</div>
+  <div class="lg-i"><span class="lg-d" style="width:12px;height:12px;background:var(--teal)"></span>5k&ndash;25k</div>
+  <div class="lg-i"><span class="lg-d" style="width:8px;height:8px;background:var(--blue)"></span>1k&ndash;5k</div>
+  <div class="lg-i"><span class="lg-d" style="width:6px;height:6px;background:var(--blue)"></span>&lt;1,000</div>
+</div>
+
+<div id="footer">
+  <span><span class="fl">Showing:</span><span class="fv" id="f-cnt">39</span></span>
+  <span><span class="fl">Pop:</span><span class="fv" id="f-pop">&mdash;</span></span>
+  <span><span class="fl">Income range:</span><span class="fv" id="f-inc">&mdash;</span></span>
+</div>
+
+<div id="zoom">
+  <button class="zb" id="z-in">+</button>
+  <button class="zb" id="z-out">&minus;</button>
+  <button class="zb" id="z-rst" title="Reset">&#8634;</button>
+</div>
+
+<script>
+const cities = [
+  {city:"Algona",id:"KC-001",lat:47.279,lon:-122.2532,pop2020:3280,pop2025:3450,area:1.3,density:2654,inc:1955,income:67500,homeVal:385000,white:42,asian:18,hispanic:28,black:7,other:5,medAge:33.5,govt:"Council-Manager",council:5,mayor:"Dave Hill",mgr:"Brian Wilson",employers:"Warehousing/logistics, small businesses",features:"Small residential city in Auburn Valley, Pacific Highway corridor",web:"https://www.algonawa.gov",school:"Auburn School District",congress:"WA-9",legDist:"30",elecYear:2023,elecNotes:"Nonpartisan municipal elections",meetSched:"2nd & 4th Monday",meetFreq:"Twice monthly"},
+  {city:"Auburn",id:"KC-002",lat:47.3073,lon:-122.2285,pop2020:87045,pop2025:85130,area:30,density:2854,inc:1891,income:75800,homeVal:425000,white:40,asian:16,hispanic:22,black:12,other:10,medAge:34.2,govt:"Mayor-Council (Strong Mayor)",council:7,mayor:"Nancy Backus",mgr:"N/A (Strong Mayor)",employers:"Muckleshoot Casino, Boeing, GSA, Amazon, Green River College",features:"Muckleshoot Reservation, White River Valley, SuperMall, Green River College",web:"https://www.auburnwa.gov",school:"Auburn School District",congress:"WA-8/WA-9",legDist:"30, 47",elecYear:2023,elecNotes:"Mayor Backus reelected 2023; nonpartisan",meetSched:"1st & 3rd Monday",meetFreq:"Twice monthly"},
+  {city:"Beaux Arts Village",id:"KC-003",lat:47.5858,lon:-122.2074,pop2020:299,pop2025:310,area:0.1,density:3100,inc:1954,income:212000,homeVal:1500000,white:78,asian:14,hispanic:3,black:1,other:4,medAge:48,govt:"Council-Manager",council:5,mayor:"Tom Stowe",mgr:"Managed by clerk/volunteers",employers:"Residential community; no major employers",features:"Smallest city in King County, arts colony on Lake Washington, founded as artist community in 1908",web:"https://www.beauxarts-wa.gov",school:"Bellevue School District",congress:"WA-9",legDist:"41",elecYear:2023,elecNotes:"Nonpartisan; volunteer governance",meetSched:"2nd Tuesday (monthly)",meetFreq:"Monthly"},
+  {city:"Bellevue",id:"KC-004",lat:47.6101,lon:-122.2015,pop2020:151786,pop2025:155024,area:33.5,density:4632,inc:1953,income:135000,homeVal:1150000,white:43,asian:39,hispanic:8,black:3,other:7,medAge:37.8,govt:"Council-Manager",council:7,mayor:"Lynne Robinson",mgr:"Brad Miyake",employers:"Microsoft, T-Mobile, Amazon, Meta, Expedia, Pokémon Company, Valve",features:"Major tech hub, Bellevue Square, Meydenbauer Center, Bellevue Arts Museum, Downtown Park, light rail",web:"https://www.bellevuewa.gov",school:"Bellevue School District",congress:"WA-1/WA-9",legDist:"41, 48",elecYear:2023,elecNotes:"Nonpartisan council elections; moderate-progressive lean",meetSched:"1st & 3rd Monday (regular); 2nd & 4th Monday (extended study)",meetFreq:"Weekly (regular + study sessions)"},
+  {city:"Black Diamond",id:"KC-005",lat:47.3084,lon:-122.0032,pop2020:4703,pop2025:5200,area:6,density:867,inc:1959,income:105000,homeVal:550000,white:72,asian:8,hispanic:10,black:3,other:7,medAge:38.5,govt:"Mayor-Council",council:5,mayor:"Tamie Deady",mgr:"N/A",employers:"Black Diamond Bakery, local agriculture, residential",features:"Former coal mining town, Black Diamond Museum, rapid residential growth, historic bakery",web:"https://www.ci.blackdiamond.wa.us",school:"Enumclaw School District",congress:"WA-8",legDist:"47",elecYear:2023,elecNotes:"Nonpartisan; growth/development key issue",meetSched:"1st & 3rd Thursday",meetFreq:"Twice monthly"},
+  {city:"Bothell",id:"KC-006",lat:47.7623,lon:-122.2054,pop2020:48174,pop2025:52669,area:13.6,density:3863,inc:1909,income:120000,homeVal:800000,white:55,asian:22,hispanic:10,black:4,other:9,medAge:37,govt:"Council-Manager",council:7,mayor:"Mason Thompson",mgr:"Erin Leonhart",employers:"UW Bothell, Cascadia College, AT&T Mobility, biotech corridor",features:"Straddles King/Snohomish county line, Canyon Park business district, UW Bothell campus, revitalized downtown",web:"https://www.bothellwa.gov",school:"Northshore School District",congress:"WA-1",legDist:"1, 45",elecYear:2023,elecNotes:"Nonpartisan; rapid growth area",meetSched:"1st & 3rd Tuesday",meetFreq:"Twice monthly"},
+  {city:"Burien",id:"KC-007",lat:47.4704,lon:-122.3468,pop2020:51996,pop2025:52058,area:10,density:5186,inc:1993,income:68000,homeVal:475000,white:38,asian:16,hispanic:28,black:10,other:8,medAge:35.5,govt:"Council-Manager",council:7,mayor:"Kevin Schilling",mgr:"Adolfo Bailon",employers:"Highline Medical Center, retail/commercial, proximity to SeaTac Airport",features:"Highly diverse community, adjacent to SeaTac Airport, Burien Town Square, ethnic restaurants district",web:"https://www.burienwa.gov",school:"Highline School District",congress:"WA-7",legDist:"33, 34",elecYear:2023,elecNotes:"Progressive-leaning council; homeless encampment policy major issue",meetSched:"1st & 3rd Monday (regular); 2nd & 4th Monday (study)",meetFreq:"Weekly (regular + study sessions)"},
+  {city:"Carnation",id:"KC-008",lat:47.6498,lon:-121.9143,pop2020:2186,pop2025:2350,area:1,density:2350,inc:1912,income:95000,homeVal:580000,white:75,asian:5,hispanic:12,black:2,other:6,medAge:36,govt:"Mayor-Council",council:5,mayor:"Kim Lisk",mgr:"N/A",employers:"Agriculture, small businesses, Remlinger Farms",features:"Snoqualmie Valley farming community, Tolt River, Remlinger Farms, Camlann Medieval Village",web:"https://www.carnationwa.gov",school:"Riverview School District",congress:"WA-1",legDist:"5",elecYear:2023,elecNotes:"Nonpartisan; rural character preservation key issue",meetSched:"2nd & 4th Tuesday",meetFreq:"Twice monthly"},
+  {city:"Clyde Hill",id:"KC-009",lat:47.6318,lon:-122.2171,pop2020:3350,pop2025:3400,area:1,density:3400,inc:1953,income:250000,homeVal:2800000,white:55,asian:35,hispanic:3,black:1,other:6,medAge:44,govt:"Council-Manager",council:5,mayor:"George Martin",mgr:"Mitchell Wasserman",employers:"Residential community; no major employers",features:"Affluent residential enclave, panoramic views of Seattle/Olympics, adjacent to Bellevue",web:"https://www.clydehill.org",school:"Bellevue School District",congress:"WA-1",legDist:"48",elecYear:2023,elecNotes:"Nonpartisan; residential character focus",meetSched:"2nd Tuesday",meetFreq:"Monthly"},
+  {city:"Covington",id:"KC-010",lat:47.3582,lon:-122.1185,pop2020:20862,pop2025:21743,area:5.9,density:3665,inc:1997,income:102000,homeVal:550000,white:55,asian:18,hispanic:14,black:6,other:7,medAge:36,govt:"Council-Manager",council:7,mayor:"Jeff Wagner",mgr:"Regan Bolli",employers:"Retail centers, Costco, Fred Meyer, small businesses",features:"Family-oriented suburb, Covington Community Park, retail corridor on Kent-Kangley Rd",web:"https://www.covingtonwa.gov",school:"Kent School District",congress:"WA-8",legDist:"47",elecYear:2023,elecNotes:"Nonpartisan; moderate-conservative leaning",meetSched:"2nd & 4th Monday",meetFreq:"Twice monthly"},
+  {city:"Des Moines",id:"KC-011",lat:47.4018,lon:-122.3243,pop2020:32889,pop2025:33286,area:6.4,density:5190,inc:1959,income:72000,homeVal:480000,white:42,asian:20,hispanic:18,black:12,other:8,medAge:37.5,govt:"Council-Manager",council:7,mayor:"Matt Pina",mgr:"Michael Matthias",employers:"Highline College, Des Moines Marina, retail",features:"Des Moines Marina, waterfront parks, Highline College, Puget Sound beach access, fishing pier",web:"https://www.desmoineswa.gov",school:"Highline School District",congress:"WA-9",legDist:"30, 33",elecYear:2023,elecNotes:"Nonpartisan; SeaTac airport impacts major issue",meetSched:"2nd & 4th Thursday",meetFreq:"Twice monthly"},
+  {city:"Duvall",id:"KC-012",lat:47.7423,lon:-121.9857,pop2020:8046,pop2025:9458,area:2.5,density:3859,inc:1913,income:130000,homeVal:750000,white:73,asian:10,hispanic:8,black:2,other:7,medAge:37,govt:"Mayor-Council",council:7,mayor:"Amy Ockerlander",mgr:"N/A",employers:"Local businesses, agriculture, Riverview School District",features:"Snoqualmie Valley rural town, Big Rock Park, McCormick Park, small-town character",web:"https://www.duvallwa.gov",school:"Riverview School District",congress:"WA-1",legDist:"5",elecYear:2023,elecNotes:"Nonpartisan; growth management key issue",meetSched:"1st & 3rd Tuesday",meetFreq:"Twice monthly"},
+  {city:"Enumclaw",id:"KC-013",lat:47.2043,lon:-121.9871,pop2020:12620,pop2025:13311,area:5.2,density:2572,inc:1913,income:78000,homeVal:475000,white:75,asian:4,hispanic:14,black:1,other:6,medAge:37,govt:"Mayor-Council",council:7,mayor:"Jan Molinaro",mgr:"N/A",employers:"Enumclaw Regional Hospital, Mutual of Enumclaw, school district",features:"Gateway to Mount Rainier, Enumclaw Expo Center, rodeo, rural/agricultural heritage, Plateau",web:"https://www.cityofenumclaw.net",school:"Enumclaw School District",congress:"WA-8",legDist:"31",elecYear:2023,elecNotes:"Nonpartisan; more conservative than western KC cities",meetSched:"2nd & 4th Monday",meetFreq:"Twice monthly"},
+  {city:"Federal Way",id:"KC-014",lat:47.3223,lon:-122.3126,pop2020:100994,pop2025:100066,area:22.3,density:4481,inc:1990,income:72000,homeVal:460000,white:32,asian:20,hispanic:20,black:17,other:11,medAge:35,govt:"Mayor-Council (Strong Mayor)",council:7,mayor:"Jim Ferrell",mgr:"N/A (Strong Mayor)",employers:"Weyerhaeuser (HQ moved), St. Francis Hospital, Wild Waves, Amazon warehouse",features:"The Commons mall, Wild Waves Theme Park, Weyerhaeuser campus, highly diverse, Dash Point State Park",web:"https://www.cityoffederalway.com",school:"Federal Way Public Schools",congress:"WA-9",legDist:"30, 33",elecYear:2023,elecNotes:"Mayor Ferrell reelected; nonpartisan but moderate-conservative mayor",meetSched:"1st & 3rd Tuesday (regular); 2nd Tuesday (study)",meetFreq:"Three times monthly"},
+  {city:"Hunts Point",id:"KC-015",lat:47.6451,lon:-122.2235,pop2020:467,pop2025:480,area:0.3,density:1600,inc:1955,income:290000,homeVal:5000000,white:70,asian:20,hispanic:3,black:1,other:6,medAge:48,govt:"Council-Manager",council:5,mayor:"Joseph Sabey",mgr:"Volunteer/part-time staff",employers:"Residential community; no major employers",features:"One of wealthiest cities in US, Lake Washington waterfront, private community, Jeff Bezos residence",web:"https://www.huntspoint-wa.gov",school:"Bellevue School District",congress:"WA-1",legDist:"48",elecYear:2023,elecNotes:"Nonpartisan; privacy and residential character issues",meetSched:"2nd Monday",meetFreq:"Monthly"},
+  {city:"Issaquah",id:"KC-016",lat:47.5301,lon:-122.0326,pop2020:40103,pop2025:39554,area:12.1,density:3261,inc:1892,income:142000,homeVal:950000,white:52,asian:30,hispanic:7,black:3,other:8,medAge:38,govt:"Mayor-Council",council:7,mayor:"Mary Lou Pauly",mgr:"N/A (has admin staff)",employers:"Costco (HQ), Boeing (Issaquah office), Microsoft, T-Mobile",features:"Costco HQ, Issaquah Alps (Tiger/Squak/Cougar Mtns), Salmon Days Festival, historic downtown",web:"https://www.issaquahwa.gov",school:"Issaquah School District",congress:"WA-8",legDist:"5, 41",elecYear:2023,elecNotes:"Nonpartisan; growth/density major issue",meetSched:"1st & 3rd Monday",meetFreq:"Twice monthly"},
+  {city:"Kenmore",id:"KC-017",lat:47.7576,lon:-122.244,pop2020:23894,pop2025:24234,area:6.2,density:3938,inc:1998,income:105000,homeVal:700000,white:62,asian:16,hispanic:10,black:4,other:8,medAge:39,govt:"Council-Manager",council:7,mayor:"Nigel Herbig",mgr:"Rob DiNovo",employers:"Kenmore Air Harbor, retail, healthcare",features:"Kenmore Air Harbor (seaplane base), north end of Lake Washington, Burke-Gilman Trail, Log Boom Park",web:"https://www.kenmorewa.gov",school:"Northshore School District",congress:"WA-1",legDist:"1, 46",elecYear:2023,elecNotes:"Nonpartisan; progressive-moderate council",meetSched:"1st & 3rd Monday",meetFreq:"Twice monthly"},
+  {city:"Kent",id:"KC-018",lat:47.3809,lon:-122.2348,pop2020:136593,pop2025:136586,area:33.6,density:4067,inc:1890,income:78000,homeVal:460000,white:30,asian:22,hispanic:22,black:16,other:10,medAge:34.5,govt:"Mayor-Council (Strong Mayor)",council:7,mayor:"Dana Ralph",mgr:"N/A (Strong Mayor)",employers:"Blue Origin, REI (distribution), Boeing, Amazon warehouses, Oberto",features:"Kent Valley industrial hub, ShoWare Center, most diverse city in WA",web:"https://www.kentwa.gov",school:"Kent School District",congress:"WA-8/WA-9",legDist:"11, 33, 47",elecYear:2023,elecNotes:"Mayor Ralph reelected; nonpartisan; public safety major issue",meetSched:"1st & 3rd Tuesday (regular); 2nd & 4th Tuesday (workshop)",meetFreq:"Weekly (regular + workshops)"},
+  {city:"Kirkland",id:"KC-019",lat:47.6815,lon:-122.2087,pop2020:92741,pop2025:96188,area:17.8,density:5402,inc:1905,income:125000,homeVal:950000,white:58,asian:20,hispanic:9,black:4,other:9,medAge:38,govt:"Council-Manager",council:7,mayor:"Kelli Curtis",mgr:"James Lopez",employers:"Google, EvergreenHealth, Costco, Kenworth Truck Co",features:"Lake Washington waterfront, Google campus, Cross Kirkland Corridor, Juanita Beach, art galleries",web:"https://www.kirklandwa.gov",school:"Lake Washington School District",congress:"WA-1",legDist:"1, 45, 48",elecYear:2023,elecNotes:"Nonpartisan; progressive-leaning; growth/housing key issue",meetSched:"1st & 3rd Tuesday (regular); 2nd & 4th Tuesday (study)",meetFreq:"Weekly (regular + study sessions)"},
+  {city:"Lake Forest Park",id:"KC-020",lat:47.7568,lon:-122.2812,pop2020:13604,pop2025:13194,area:3.5,density:3751,inc:1961,income:120000,homeVal:750000,white:68,asian:14,hispanic:7,black:4,other:7,medAge:42,govt:"Council-Manager",council:7,mayor:"Semra Riddle",mgr:"Phillip Hill",employers:"Third Place Books/Commons, local retail, residential",features:"Third Place Books, Lyon Creek, tree-canopy preservation, Burke-Gilman Trail, Lake Washington shore",web:"https://www.cityoflfp.gov",school:"Shoreline School District",congress:"WA-7",legDist:"32, 46",elecYear:2023,elecNotes:"Nonpartisan; progressive-leaning",meetSched:"2nd & 4th Thursday",meetFreq:"Twice monthly"},
+  {city:"Maple Valley",id:"KC-021",lat:47.3926,lon:-122.0453,pop2020:28086,pop2025:28669,area:6,density:4775,inc:1997,income:125000,homeVal:650000,white:64,asian:14,hispanic:10,black:4,other:8,medAge:37.5,govt:"Council-Manager",council:7,mayor:"Sean Kelly",mgr:"Laura Philpot",employers:"Tahoma School District, retail, small businesses",features:"Cedar River Trail, Lake Wilderness Park, family-oriented suburb, annual Maple Valley Days",web:"https://www.maplevalleywa.gov",school:"Tahoma School District",congress:"WA-8",legDist:"47",elecYear:2023,elecNotes:"Nonpartisan; public safety levy 2023",meetSched:"2nd & 4th Monday",meetFreq:"Twice monthly"},
+  {city:"Medina",id:"KC-022",lat:47.621,lon:-122.2282,pop2020:3286,pop2025:3350,area:1.4,density:2393,inc:1955,income:275000,homeVal:3500000,white:56,asian:33,hispanic:3,black:1,other:7,medAge:45,govt:"Council-Manager",council:5,mayor:"Ken Kansky",mgr:"Michael Sauerwein",employers:"Residential community; no major employers",features:"Home to Bill Gates, Lake Washington waterfront, 520 bridge, one of wealthiest cities in US",web:"https://www.medinaWA.gov",school:"Bellevue School District",congress:"WA-1",legDist:"48",elecYear:2023,elecNotes:"Nonpartisan; privacy/traffic major issues",meetSched:"2nd Monday (regular); 4th Monday (if needed)",meetFreq:"Monthly to twice monthly"},
+  {city:"Mercer Island",id:"KC-023",lat:47.5707,lon:-122.2221,pop2020:25750,pop2025:25190,area:6.4,density:3946,inc:1960,income:175000,homeVal:1600000,white:58,asian:28,hispanic:4,black:2,other:8,medAge:43,govt:"Council-Manager",council:7,mayor:"Salim Nice",mgr:"Jessi Bon",employers:"Mercer Island School District, retail, SYMETRA",features:"Island in Lake Washington, I-90 corridor, Luther Burbank Park, top-rated schools, light rail station",web:"https://www.mercerisland.gov",school:"Mercer Island School District",congress:"WA-9",legDist:"41",elecYear:2023,elecNotes:"Nonpartisan; light rail access/I-90 changes major issue",meetSched:"1st & 3rd Tuesday",meetFreq:"Twice monthly"},
+  {city:"Milton",id:"KC-024",lat:47.2488,lon:-122.3154,pop2020:8211,pop2025:8500,area:2.9,density:2931,inc:1907,income:85000,homeVal:480000,white:52,asian:14,hispanic:16,black:10,other:8,medAge:36,govt:"Mayor-Council",council:7,mayor:"Shanna Darnell",mgr:"N/A",employers:"Small businesses, Surprise Lake community",features:"Straddles King/Pierce county line, Surprise Lake, small-town feel near Tacoma/Federal Way",web:"https://www.cityofmilton.net",school:"Fife School District",congress:"WA-9",legDist:"30",elecYear:2023,elecNotes:"Nonpartisan; moderate",meetSched:"1st & 3rd Monday",meetFreq:"Twice monthly"},
+  {city:"Newcastle",id:"KC-025",lat:47.5301,lon:-122.1632,pop2020:13145,pop2025:13053,area:4.4,density:2943,inc:1994,income:145000,homeVal:900000,white:40,asian:40,hispanic:7,black:5,other:8,medAge:40,govt:"Council-Manager",council:7,mayor:"Linda Newing",mgr:"Rob Wyman",employers:"Residential community, small commercial/retail",features:"Newcastle Beach Park, Coal Creek Park, former coal mining area, views of Lake Washington/Cascades",web:"https://www.newcastlewa.gov",school:"Renton/Issaquah/Bellevue School Districts",congress:"WA-9",legDist:"41",elecYear:2023,elecNotes:"Nonpartisan; residential character preservation",meetSched:"1st & 3rd Tuesday",meetFreq:"Twice monthly"},
+  {city:"Normandy Park",id:"KC-026",lat:47.4365,lon:-122.3429,pop2020:6875,pop2025:6900,area:2.5,density:2760,inc:1953,income:115000,homeVal:680000,white:68,asian:12,hispanic:8,black:5,other:7,medAge:44,govt:"Council-Manager",council:7,mayor:"Sue-Ann Hohimer",mgr:"Amy Arrington",employers:"Residential community, small retail",features:"Puget Sound waterfront, private community beach, quiet residential enclave near SeaTac",web:"https://www.normandyparkwa.gov",school:"Highline School District",congress:"WA-7",legDist:"33",elecYear:2023,elecNotes:"Nonpartisan; airport noise major issue",meetSched:"2nd & 4th Tuesday",meetFreq:"Twice monthly"},
+  {city:"North Bend",id:"KC-027",lat:47.4957,lon:-121.787,pop2020:7502,pop2025:8815,area:4.3,density:2027,inc:1909,income:120000,homeVal:700000,white:74,asian:8,hispanic:9,black:2,other:7,medAge:36,govt:"Mayor-Council",council:7,mayor:"Rob McFarland",mgr:"N/A",employers:"North Bend Premium Outlets, Snoqualmie Casino, outdoor recreation industry",features:"Gateway to Snoqualmie Pass, Twin Peaks filming location, Mt Si trailhead, outlet mall, Rattlesnake Lake",web:"https://www.northbendwa.gov",school:"Snoqualmie Valley School District",congress:"WA-8",legDist:"5",elecYear:2023,elecNotes:"Nonpartisan; growth/outdoor access issues",meetSched:"1st & 3rd Tuesday",meetFreq:"Twice monthly"},
+  {city:"Pacific",id:"KC-028",lat:47.2652,lon:-122.2517,pop2020:7038,pop2025:7200,area:2.7,density:2667,inc:1909,income:65000,homeVal:360000,white:42,asian:14,hispanic:25,black:10,other:9,medAge:33,govt:"Mayor-Council",council:5,mayor:"Leanne Guier",mgr:"N/A",employers:"Small businesses, distribution, White River Valley agriculture",features:"Straddles King/Pierce county line, White River, small working-class community, flood-prone areas",web:"https://www.cityofpacific.com",school:"Auburn School District",congress:"WA-9",legDist:"30",elecYear:2023,elecNotes:"Nonpartisan; flood mitigation major issue",meetSched:"2nd & 4th Monday",meetFreq:"Twice monthly"},
+  {city:"Redmond",id:"KC-029",lat:47.674,lon:-122.1215,pop2020:73374,pop2025:84400,area:17,density:5094,inc:1912,income:155000,homeVal:1100000,white:40,asian:42,hispanic:7,black:3,other:8,medAge:35,govt:"Mayor-Council",council:7,mayor:"Angela Birney",mgr:"N/A (has COO/admin)",employers:"Microsoft (HQ), Nintendo of America (HQ), Facebook/Meta, AT&T Mobility",features:"Microsoft HQ, Marymoor Park, Redmond Town Center, bike capital of Northwest, Sammamish River Trail",web:"https://www.redmond.gov",school:"Lake Washington School District",congress:"WA-1",legDist:"45, 48",elecYear:2023,elecNotes:"Nonpartisan; progressive-moderate; housing/transit key issues",meetSched:"1st & 3rd Tuesday (regular); 2nd & 4th Tuesday (study)",meetFreq:"Weekly (regular + study sessions)"},
+  {city:"Renton",id:"KC-030",lat:47.4829,lon:-122.2171,pop2020:106734,pop2025:105245,area:23.6,density:4471,inc:1901,income:82000,homeVal:550000,white:32,asian:26,hispanic:14,black:16,other:12,medAge:35,govt:"Mayor-Council (Strong Mayor)",council:7,mayor:"Armondo Pavone",mgr:"N/A (Strong Mayor)",employers:"Boeing (737 MAX factory), PACCAR, Valley Medical Center, IKEA",features:"Boeing 737 factory, The Landing shopping center, Gene Coulon Memorial Beach Park, highly diverse",web:"https://www.rentonwa.gov",school:"Renton School District",congress:"WA-9",legDist:"11, 37, 41",elecYear:2023,elecNotes:"Nonpartisan; housing/Boeing economy major issues",meetSched:"2nd & 4th Monday (regular); Monday workshops as needed",meetFreq:"Twice monthly + workshops"},
+  {city:"Sammamish",id:"KC-031",lat:47.6163,lon:-122.0356,pop2020:67449,pop2025:66230,area:20.4,density:3242,inc:1999,income:195000,homeVal:1400000,white:45,asian:40,hispanic:5,black:2,other:8,medAge:40,govt:"Council-Manager",council:7,mayor:"Amy Falcone",mgr:"Jeff Engel",employers:"Residential community; commuters to tech corridor",features:"Beaver Lake Park, Pine Lake, Plateau community, top-rated schools, affluent tech-worker suburb",web:"https://www.sammamish.us",school:"Issaquah School District",congress:"WA-8",legDist:"5, 45",elecYear:2023,elecNotes:"Nonpartisan; growth restrictions/town center debate",meetSched:"1st & 3rd Tuesday",meetFreq:"Twice monthly"},
+  {city:"SeaTac",id:"KC-032",lat:47.4439,lon:-122.296,pop2020:31387,pop2025:34683,area:10.1,density:3446,inc:1990,income:58000,homeVal:400000,white:25,asian:22,hispanic:22,black:20,other:11,medAge:33,govt:"Council-Manager",council:7,mayor:"Erin Sitterley",mgr:"Carl Cole",employers:"Seattle-Tacoma Int'l Airport (Port of Seattle), Alaska Airlines, Delta, hotels, logistics",features:"Home of SeaTac Airport, Angle Lake Park, light rail station, Westfield Southcenter (shared w/Tukwila)",web:"https://www.seatacwa.gov",school:"Highline School District",congress:"WA-9",legDist:"11, 33",elecYear:2023,elecNotes:"First city in US to pass $15 min wage (2013); progressive council",meetSched:"2nd & 4th Tuesday",meetFreq:"Twice monthly"},
+  {city:"Seattle",id:"KC-033",lat:47.6062,lon:-122.3321,pop2020:740600,pop2025:791093,area:84,density:9418,inc:1869,income:110000,homeVal:850000,white:58,asian:16,hispanic:7,black:7,other:12,medAge:35.5,govt:"Mayor-Council (Strong Mayor)",council:9,mayor:"Katie Wilson",mgr:"N/A (Strong Mayor; has Deputy Mayor)",employers:"Amazon (HQ), Microsoft, Boeing, UW, Starbucks (HQ), Costco, Nordstrom, Fred Hutchinson",features:"Space Needle, Pike Place Market, Capitol Hill, UW, tech hub, Port of Seattle, light rail, Puget Sound waterfront",web:"https://www.seattle.gov",school:"Seattle Public Schools",congress:"WA-7/WA-9",legDist:"11, 32, 34, 36, 37, 43, 46",elecYear:2025,elecNotes:"Mayor Wilson elected Nov 2025; 7 district + 2 at-large council; progressive city, moderate swing in 2023",meetSched:"Every Monday (briefing 9:30am; formal session 2pm)",meetFreq:"Weekly"},
+  {city:"Shoreline",id:"KC-034",lat:47.7557,lon:-122.3415,pop2020:58820,pop2025:68108,area:11.6,density:5854,inc:1995,income:95000,homeVal:650000,white:55,asian:18,hispanic:10,black:8,other:9,medAge:38,govt:"Council-Manager",council:7,mayor:"Keith Scully",mgr:"Debbie Tarry",employers:"Shoreline Community College, retail, North Seattle medical facilities",features:"New light rail stations (145th, 185th), Shoreline Community College, Interurban Trail, rapid densification",web:"https://www.shorelinewa.gov",school:"Shoreline School District",congress:"WA-7",legDist:"32, 46",elecYear:2023,elecNotes:"Nonpartisan; progressive; light rail TOD major transformation",meetSched:"1st & 3rd Monday (regular); 2nd Monday (workshop)",meetFreq:"Three times monthly"},
+  {city:"Skykomish",id:"KC-035",lat:47.7112,lon:-121.3528,pop2020:198,pop2025:210,area:0.4,density:525,inc:1909,income:52000,homeVal:280000,white:85,asian:2,hispanic:8,black:0.5,other:4.5,medAge:45,govt:"Mayor-Council",council:5,mayor:"Henry Sladek",mgr:"N/A",employers:"BNSF Railway, outdoor recreation, tourism",features:"Tiny Cascade Range mountain town, BNSF railway hub, Stevens Pass gateway, historic railroad town",web:"https://www.townofsky.com",school:"Skykomish School District",congress:"WA-8",legDist:"5",elecYear:2023,elecNotes:"Nonpartisan; very small electorate; infrastructure/flooding issues",meetSched:"2nd Tuesday",meetFreq:"Monthly"},
+  {city:"Snoqualmie",id:"KC-036",lat:47.5287,lon:-121.8254,pop2020:14084,pop2025:13664,area:7.2,density:1904,inc:1903,income:150000,homeVal:850000,white:64,asian:18,hispanic:7,black:3,other:8,medAge:36,govt:"Mayor-Council",council:7,mayor:"Katherine Ross",mgr:"N/A",employers:"Snoqualmie Casino (Snoqualmie Tribe), DirtFish Rally School, city services",features:"Snoqualmie Falls (270 ft), Snoqualmie Casino, Salish Lodge, historic railroad depot, Twin Peaks location",web:"https://www.ci.snoqualmie.wa.us",school:"Snoqualmie Valley School District",congress:"WA-8",legDist:"5",elecYear:2023,elecNotes:"Nonpartisan; Snoqualmie Ridge master-planned community growth",meetSched:"2nd & 4th Monday",meetFreq:"Twice monthly"},
+  {city:"Tukwila",id:"KC-037",lat:47.474,lon:-122.261,pop2020:21748,pop2025:21608,area:9.2,density:2353,inc:1908,income:55000,homeVal:400000,white:22,asian:28,hispanic:18,black:22,other:10,medAge:32,govt:"Mayor-Council",council:7,mayor:"Allan Ekberg",mgr:"N/A",employers:"Westfield Southcenter, Boeing, Amazon, Costco regional office",features:"Westfield Southcenter Mall (largest in PNW), most ethnically diverse city in WA, Duwamish River, light rail",web:"https://www.tukwilawa.gov",school:"Tukwila School District",congress:"WA-9",legDist:"11, 33",elecYear:2023,elecNotes:"Nonpartisan; highly diverse city; retail tax revenue important",meetSched:"1st & 3rd Monday",meetFreq:"Twice monthly"},
+  {city:"Woodinville",id:"KC-038",lat:47.7543,lon:-122.1635,pop2020:13475,pop2025:14058,area:5.6,density:2504,inc:1993,income:135000,homeVal:850000,white:68,asian:14,hispanic:8,black:2,other:8,medAge:42,govt:"Council-Manager",council:7,mayor:"James Evans",mgr:"Brandon Buchanan",employers:"Wineries/tasting rooms (100+), Molbak's, retail, Willows Run Golf",features:"Wine country (100+ tasting rooms), Chateau Ste. Michelle, Red Hook Brewery, Sammamish River Trail",web:"https://www.ci.woodinville.wa.us",school:"Northshore School District",congress:"WA-1",legDist:"1, 45",elecYear:2023,elecNotes:"Nonpartisan; wine/tourism economy",meetSched:"2nd & 4th Tuesday",meetFreq:"Twice monthly"},
+  {city:"Yarrow Point",id:"KC-039",lat:47.6462,lon:-122.2179,pop2020:1117,pop2025:1130,area:0.4,density:2825,inc:1959,income:260000,homeVal:3200000,white:60,asian:30,hispanic:3,black:1,other:6,medAge:46,govt:"Council-Manager",council:5,mayor:"Dicker Cahill",mgr:"Part-time staff",employers:"Residential community; no major employers",features:"Affluent Lake Washington community, 520 bridge access, private waterfront, small-town governance",web:"https://www.yarrowpointwa.gov",school:"Bellevue School District",congress:"WA-1",legDist:"48",elecYear:2023,elecNotes:"Nonpartisan; 520 bridge traffic major issue",meetSched:"2nd Tuesday",meetFreq:"Monthly"}
+];
+// ============================
+// HELPERS
+// ============================
+function fmt(n) { return n.toLocaleString('en-US'); }
+function fmtM(n) { return n >= 1e6 ? '$' + (n/1e6).toFixed(1) + 'M' : '$' + fmt(n); }
+function sz(p) {
+  if (p >= 100000) return 'xl';
+  if (p >= 25000) return 'lg';
+  if (p >= 5000) return 'md';
+  if (p >= 1000) return 'sm';
+  return 'xs';
+}
+var DC = { white:'#6ba3d6', asian:'#f0c850', hispanic:'#3dd6c8', black:'#ff6b8a', other:'#a78bfa' };
+
+// ============================
+// MAP PROJECTION
+// ============================
+var LAT_MIN = 47.15, LAT_MAX = 47.82, LON_MIN = -122.46, LON_MAX = -121.28;
+var PAD = 80;
+
+function project(lat, lon) {
+  var w = window.innerWidth, h = window.innerHeight;
+  return {
+    x: PAD + ((lon - LON_MIN) / (LON_MAX - LON_MIN)) * (w - 2*PAD),
+    y: PAD + ((LAT_MAX - lat) / (LAT_MAX - LAT_MIN)) * (h - 2*PAD)
+  };
+}
+
+// ============================
+// SVG BACKGROUND (county outline + water)
+// ============================
+function drawSVG() {
+  var inner = document.getElementById('map-inner');
+  var existing = inner.querySelector('svg');
+  if (existing) existing.remove();
+
+  var svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.style.cssText = 'position:absolute;width:100%;height:100%;pointer-events:none;z-index:0';
+  svg.setAttribute('width', window.innerWidth);
+  svg.setAttribute('height', window.innerHeight);
+
+  // County boundary (simplified)
+  var boundary = [
+    [47.734,-122.435],[47.778,-122.345],[47.78,-122.2],[47.775,-122.1],
+    [47.77,-121.95],[47.75,-121.7],[47.72,-121.45],[47.7,-121.35],
+    [47.6,-121.35],[47.5,-121.7],[47.45,-121.75],[47.35,-121.9],
+    [47.2,-121.93],[47.19,-122.0],[47.24,-122.15],[47.24,-122.35],
+    [47.28,-122.35],[47.32,-122.37],[47.4,-122.37],[47.43,-122.35],
+    [47.47,-122.37],[47.5,-122.36],[47.54,-122.39],[47.6,-122.44],
+    [47.66,-122.43],[47.7,-122.40],[47.734,-122.435]
+  ];
+  var pts = boundary.map(function(c) { var p = project(c[0],c[1]); return p.x+','+p.y; }).join(' ');
+  var poly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+  poly.setAttribute('points', pts);
+  poly.setAttribute('class','county-fill');
+  svg.appendChild(poly);
+
+  // Lake Washington (simplified)
+  var lakeWA = [
+    [47.72,-122.26],[47.7,-122.24],[47.67,-122.22],[47.64,-122.21],
+    [47.6,-122.22],[47.57,-122.23],[47.55,-122.22],[47.52,-122.21],
+    [47.50,-122.20],[47.50,-122.22],[47.52,-122.24],[47.55,-122.25],
+    [47.57,-122.26],[47.60,-122.26],[47.63,-122.25],[47.66,-122.25],
+    [47.69,-122.26],[47.72,-122.26]
+  ];
+  var lPts = lakeWA.map(function(c) { var p = project(c[0],c[1]); return p.x+','+p.y; }).join(' ');
+  var lake = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+  lake.setAttribute('points', lPts);
+  lake.setAttribute('class','water');
+  svg.appendChild(lake);
+
+  // Lake Sammamish
+  var lakeSam = [
+    [47.62,-122.06],[47.60,-122.05],[47.58,-122.06],[47.56,-122.07],
+    [47.55,-122.08],[47.56,-122.09],[47.58,-122.09],[47.60,-122.08],
+    [47.62,-122.07],[47.62,-122.06]
+  ];
+  var sPts = lakeSam.map(function(c) { var p = project(c[0],c[1]); return p.x+','+p.y; }).join(' ');
+  var lake2 = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+  lake2.setAttribute('points', sPts);
+  lake2.setAttribute('class','water');
+  svg.appendChild(lake2);
+
+  // Puget Sound (western edge)
+  var sound = [
+    [47.78,-122.44],[47.78,-122.50],[47.19,-122.50],[47.19,-122.44],
+    [47.24,-122.42],[47.32,-122.40],[47.40,-122.39],[47.47,-122.40],
+    [47.54,-122.41],[47.60,-122.44],[47.66,-122.44],[47.72,-122.42],[47.78,-122.44]
+  ];
+  var sdPts = sound.map(function(c) { var p = project(c[0],c[1]); return p.x+','+p.y; }).join(' ');
+  var snd = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+  snd.setAttribute('points', sdPts);
+  snd.setAttribute('class','water');
+  svg.appendChild(snd);
+
+  inner.insertBefore(svg, inner.firstChild);
+}
+
+// ============================
+// MARKERS
+// ============================
+var mapInner = document.getElementById('map-inner');
+var hoverCard = document.getElementById('hover-card');
+var activeCity = null;
+var activeEl = null;
+var govFilter = 'all';
+
+function renderMarkers() {
+  var old = mapInner.querySelectorAll('.marker');
+  old.forEach(function(m) { m.remove(); });
+  var shown = [];
+
+  cities.forEach(function(c, i) {
+    if (!matchGov(c)) return;
+    shown.push(c);
+    var pos = project(c.lat, c.lon);
+    var s = sz(c.pop2025);
+    var el = document.createElement('div');
+    el.className = 'marker sz-' + s;
+    el.style.left = pos.x + 'px';
+    el.style.top = pos.y + 'px';
+    el.style.animationDelay = (i * 12) + 'ms';
+    el.innerHTML = '<div class="marker-dot"><div class="marker-pulse"></div></div>' +
+      '<div class="marker-label' + (c.pop2025 >= 40000 ? ' label-always' : '') + '">' + c.city + '</div>';
+    el.addEventListener('mouseenter', function(e) { showHover(e, c); });
+    el.addEventListener('mousemove', function(e) { moveHover(e); });
+    el.addEventListener('mouseleave', hideHover);
+    el.addEventListener('click', function(e) { e.stopPropagation(); openPanel(c, el); });
+    mapInner.appendChild(el);
+  });
+  updateFooter(shown);
+}
+
+function matchGov(c) {
+  if (govFilter === 'all') return true;
+  if (govFilter === 'strong-mayor') return c.govt.indexOf('Strong Mayor') >= 0;
+  if (govFilter === 'council-manager') return c.govt === 'Council-Manager';
+  if (govFilter === 'mayor-council') return c.govt.indexOf('Mayor-Council') >= 0 && c.govt.indexOf('Strong') < 0;
+  return true;
+}
+
+function updateFooter(shown) {
+  document.getElementById('f-cnt').textContent = shown.length;
+  document.getElementById('f-pop').textContent = fmt(shown.reduce(function(s,c){return s+c.pop2025},0));
+  var inc = shown.map(function(c){return c.income}).sort(function(a,b){return a-b});
+  if (inc.length) document.getElementById('f-inc').textContent = fmtM(inc[0]) + ' \u2013 ' + fmtM(inc[inc.length-1]);
+}
+
+// ============================
+// HOVER CARD (rich mouseover)
+// ============================
+function showHover(e, c) {
+  var hc = document.getElementById('hover-card');
+  hc.querySelector('.hc-name').textContent = c.city;
+  hc.querySelector('.hc-body').innerHTML =
+    '<div class="hc-row"><span class="hc-label">Population (2025)</span><span class="hc-val">' + fmt(c.pop2025) + '</span></div>' +
+    '<div class="hc-row"><span class="hc-label">Median Income</span><span class="hc-val">' + fmtM(c.income) + '</span></div>' +
+    '<div class="hc-row"><span class="hc-label">Home Value</span><span class="hc-val">' + fmtM(c.homeVal) + '</span></div>' +
+    '<div class="hc-row"><span class="hc-label">Government</span><span class="hc-val">' + c.govt + '</span></div>' +
+    '<div class="hc-row"><span class="hc-label">Mayor</span><span class="hc-val">' + c.mayor + '</span></div>' +
+    '<div class="hc-bar">' +
+      '<div class="hc-seg" style="width:'+c.white+'%;background:'+DC.white+'"></div>' +
+      '<div class="hc-seg" style="width:'+c.asian+'%;background:'+DC.asian+'"></div>' +
+      '<div class="hc-seg" style="width:'+c.hispanic+'%;background:'+DC.hispanic+'"></div>' +
+      '<div class="hc-seg" style="width:'+c.black+'%;background:'+DC.black+'"></div>' +
+      '<div class="hc-seg" style="width:'+c.other+'%;background:'+DC.other+'"></div>' +
+    '</div>' +
+    '<div class="hc-legend">' +
+      '<span><i style="background:'+DC.white+'"></i>White '+c.white+'%</span>' +
+      '<span><i style="background:'+DC.asian+'"></i>Asian '+c.asian+'%</span>' +
+      '<span><i style="background:'+DC.hispanic+'"></i>Hisp '+c.hispanic+'%</span>' +
+      '<span><i style="background:'+DC.black+'"></i>Black '+c.black+'%</span>' +
+      '<span><i style="background:'+DC.other+'"></i>Other '+c.other+'%</span>' +
+    '</div>' +
+    '<div style="margin-top:6px;font-size:9px;color:var(--t3)">Click for full details</div>';
+  hc.classList.add('show');
+  moveHover(e);
+}
+
+function moveHover(e) {
+  var hc = document.getElementById('hover-card');
+  var x = e.clientX + 18, y = e.clientY - 10;
+  if (x + 310 > window.innerWidth) x = e.clientX - 320;
+  if (y + 260 > window.innerHeight) y = window.innerHeight - 270;
+  if (y < 10) y = 10;
+  hc.style.left = x + 'px';
+  hc.style.top = y + 'px';
+}
+
+function hideHover() { document.getElementById('hover-card').classList.remove('show'); }
+
+// ============================
+// DETAIL PANEL (click)
+// ============================
+function openPanel(c, el) {
+  if (activeEl) activeEl.classList.remove('active');
+  if (el) { el.classList.add('active'); activeEl = el; }
+  activeCity = c;
+
+  document.getElementById('p-content').innerHTML =
+    '<div class="p-head">' +
+      '<h2>' + c.city + '</h2>' +
+      '<div class="p-sub">' + c.id + ' &middot; Est. ' + c.inc + ' &middot; ' + c.lat.toFixed(4) + '&deg;N, ' + Math.abs(c.lon).toFixed(4) + '&deg;W</div>' +
+    '</div>' +
+
+    '<div class="p-sec"><div class="p-sec-t">Key Statistics</div><div class="sg">' +
+      '<div class="si"><div class="si-l">Population (2025)</div><div class="si-v c-blue">' + fmt(c.pop2025) + '</div></div>' +
+      '<div class="si"><div class="si-l">Census 2020</div><div class="si-v">' + fmt(c.pop2020) + '</div></div>' +
+      '<div class="si"><div class="si-l">Median Income</div><div class="si-v c-teal">' + fmtM(c.income) + '</div></div>' +
+      '<div class="si"><div class="si-l">Home Value</div><div class="si-v c-gold">' + fmtM(c.homeVal) + '</div></div>' +
+      '<div class="si"><div class="si-l">Area</div><div class="si-v">' + c.area + ' sq mi</div></div>' +
+      '<div class="si"><div class="si-l">Density</div><div class="si-v">' + fmt(c.density) + '/mi&sup2;</div></div>' +
+      '<div class="si"><div class="si-l">Median Age</div><div class="si-v">' + c.medAge + '</div></div>' +
+      '<div class="si"><div class="si-l">Incorporated</div><div class="si-v">' + c.inc + '</div></div>' +
+    '</div></div>' +
+
+    '<div class="p-sec"><div class="p-sec-t">Demographics</div>' +
+      '<div class="db">' +
+        '<div class="db-s" style="width:'+c.white+'%;background:'+DC.white+'"></div>' +
+        '<div class="db-s" style="width:'+c.asian+'%;background:'+DC.asian+'"></div>' +
+        '<div class="db-s" style="width:'+c.hispanic+'%;background:'+DC.hispanic+'"></div>' +
+        '<div class="db-s" style="width:'+c.black+'%;background:'+DC.black+'"></div>' +
+        '<div class="db-s" style="width:'+c.other+'%;background:'+DC.other+'"></div>' +
+      '</div>' +
+      '<div class="dl">' +
+        '<div class="dl-i"><span class="dl-d" style="background:'+DC.white+'"></span>White '+c.white+'%</div>' +
+        '<div class="dl-i"><span class="dl-d" style="background:'+DC.asian+'"></span>Asian '+c.asian+'%</div>' +
+        '<div class="dl-i"><span class="dl-d" style="background:'+DC.hispanic+'"></span>Hispanic '+c.hispanic+'%</div>' +
+        '<div class="dl-i"><span class="dl-d" style="background:'+DC.black+'"></span>Black '+c.black+'%</div>' +
+        '<div class="dl-i"><span class="dl-d" style="background:'+DC.other+'"></span>Other '+c.other+'%</div>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="p-sec"><div class="p-sec-t">Government &amp; Leadership</div>' +
+      '<div class="ir"><span class="ir-l">Structure</span><span class="ir-v">' + c.govt + '</span></div>' +
+      '<div class="ir"><span class="ir-l">Mayor</span><span class="ir-v">' + c.mayor + '</span></div>' +
+      '<div class="ir"><span class="ir-l">City Manager</span><span class="ir-v">' + c.mgr + '</span></div>' +
+      '<div class="ir"><span class="ir-l">Council Size</span><span class="ir-v">' + c.council + ' members</span></div>' +
+      '<div class="ir"><span class="ir-l">Council Meetings</span><span class="ir-v">' + c.meetSched + '</span></div>' +
+      '<div class="ir"><span class="ir-l">Frequency</span><span class="ir-v">' + c.meetFreq + '</span></div>' +
+    '</div>' +
+
+    '<div class="p-sec"><div class="p-sec-t">Districts &amp; Representation</div>' +
+      '<div class="ir"><span class="ir-l">US Congress</span><span class="ir-v">' + c.congress + '</span></div>' +
+      '<div class="ir"><span class="ir-l">WA Legislature</span><span class="ir-v">' + c.legDist + '</span></div>' +
+      '<div class="ir"><span class="ir-l">School District</span><span class="ir-v">' + c.school + '</span></div>' +
+    '</div>' +
+
+    '<div class="p-sec"><div class="p-sec-t">Elections</div>' +
+      '<div class="ir"><span class="ir-l">Last Major Election</span><span class="ir-v">' + c.elecYear + '</span></div>' +
+      '<div class="nt" style="margin-top:3px">' + c.elecNotes + '</div>' +
+    '</div>' +
+
+    '<div class="p-sec"><div class="p-sec-t">Major Employers</div>' +
+      '<div class="nt">' + c.employers + '</div>' +
+    '</div>' +
+
+    '<div class="p-sec"><div class="p-sec-t">Notable Features</div>' +
+      '<div class="nt">' + c.features + '</div>' +
+      '<a class="wl" href="' + c.web + '" target="_blank">' + c.web.replace('https://','').replace('http://','') + '</a>' +
+    '</div>';
+
+  document.getElementById('panel').classList.add('open');
+}
+
+// Close panel
+document.getElementById('p-close-btn').addEventListener('click', closePanel);
+document.getElementById('map-canvas').addEventListener('click', function(e) {
+  if (!e.target.closest('.marker')) closePanel();
+});
+function closePanel() {
+  document.getElementById('panel').classList.remove('open');
+  if (activeEl) { activeEl.classList.remove('active'); activeEl = null; }
+  activeCity = null;
+}
+
+// ============================
+// GOV FILTER
+// ============================
+var govBtns = document.querySelectorAll('#gov-tg .tg-btn');
+govBtns.forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    govBtns.forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    govFilter = btn.dataset.gov;
+    renderMarkers();
+  });
+});
+
+// ============================
+// SEARCH
+// ============================
+var sIn = document.getElementById('search-in');
+var sList = document.getElementById('search-list');
+sIn.addEventListener('input', function() {
+  var q = sIn.value.toLowerCase().trim();
+  if (!q) { sList.classList.remove('vis'); return; }
+  var m = cities.filter(function(c) {
+    return c.city.toLowerCase().indexOf(q) >= 0 ||
+           c.mayor.toLowerCase().indexOf(q) >= 0 ||
+           c.employers.toLowerCase().indexOf(q) >= 0 ||
+           c.features.toLowerCase().indexOf(q) >= 0;
+  }).slice(0, 8);
+  if (!m.length) { sList.classList.remove('vis'); return; }
+  sList.innerHTML = m.map(function(c) {
+    return '<div class="sr-item" data-city="' + c.city + '"><span class="sr-city">' + c.city + '</span><span class="sr-meta">' + fmt(c.pop2025) + ' &middot; ' + c.govt + '</span></div>';
+  }).join('');
+  sList.classList.add('vis');
+  sList.querySelectorAll('.sr-item').forEach(function(item) {
+    item.addEventListener('click', function() {
+      var city = cities.find(function(c) { return c.city === item.dataset.city; });
+      if (city) {
+        govFilter = 'all';
+        govBtns.forEach(function(b) { b.classList.remove('active'); });
+        document.querySelector('[data-gov="all"]').classList.add('active');
+        renderMarkers();
+        var markers = mapInner.querySelectorAll('.marker');
+        var targetEl = null;
+        markers.forEach(function(mk) {
+          if (mk.querySelector('.marker-label') && mk.querySelector('.marker-label').textContent === city.city) targetEl = mk;
+        });
+        openPanel(city, targetEl);
+        sIn.value = '';
+        sList.classList.remove('vis');
+      }
+    });
+  });
+});
+sIn.addEventListener('blur', function() { setTimeout(function() { sList.classList.remove('vis'); }, 200); });
+
+// ============================
+// PAN & ZOOM
+// ============================
+var scale = 1, ox = 0, oy = 0, dragging = false, dx, dy;
+var mc = document.getElementById('map-canvas');
+
+mc.addEventListener('mousedown', function(e) {
+  if (e.target.closest('.marker') || e.target.closest('#panel')) return;
+  dragging = true; mc.classList.add('grabbing');
+  dx = e.clientX - ox; dy = e.clientY - oy;
+});
+document.addEventListener('mousemove', function(e) {
+  if (!dragging) return;
+  ox = e.clientX - dx; oy = e.clientY - dy;
+  applyTx();
+});
+document.addEventListener('mouseup', function() { dragging = false; mc.classList.remove('grabbing'); });
+
+mc.addEventListener('wheel', function(e) {
+  e.preventDefault();
+  var d = e.deltaY > 0 ? 0.9 : 1.1;
+  var ns = Math.min(Math.max(scale * d, 0.5), 5);
+  var rect = mc.getBoundingClientRect();
+  var cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+  ox = cx - (cx - ox) * (ns / scale);
+  oy = cy - (cy - oy) * (ns / scale);
+  scale = ns;
+  applyTx();
+}, { passive: false });
+
+function applyTx() {
+  document.getElementById('map-inner').style.transform = 'translate(' + ox + 'px,' + oy + 'px) scale(' + scale + ')';
+}
+
+document.getElementById('z-in').addEventListener('click', function() { scale = Math.min(scale * 1.3, 5); applyTx(); });
+document.getElementById('z-out').addEventListener('click', function() { scale = Math.max(scale * 0.7, 0.5); applyTx(); });
+document.getElementById('z-rst').addEventListener('click', function() { scale = 1; ox = 0; oy = 0; applyTx(); });
+
+// ============================
+// RESIZE
+// ============================
+window.addEventListener('resize', function() { drawSVG(); renderMarkers(); });
+
+// ============================
+// INIT
+// ============================
+drawSVG();
+renderMarkers();
+
+</script>
+</body>
+</html>
