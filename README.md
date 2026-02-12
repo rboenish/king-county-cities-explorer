@@ -1,5 +1,7 @@
 # King County Cities Explorer
 
+**[View Live Site](https://rboenish.github.io/king-county-cities-explorer/)**
+
 An interactive map and data explorer for all 39 incorporated cities in King County, Washington.
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
