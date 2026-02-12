@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>King County Cities Explorer</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 :root {
   --bg: #0b1a2e;
@@ -26,20 +28,18 @@
 body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--t1);overflow:hidden;height:100vh;width:100vw}
 
 /* === MAP CANVAS === */
-#map-canvas{position:absolute;inset:0;overflow:hidden;cursor:grab}
-#map-canvas.grabbing{cursor:grabbing}
-#map-inner{position:absolute;transform-origin:0 0;will-change:transform}
+#map-canvas{position:absolute;inset:0;overflow:hidden}
+#leaflet-map{position:absolute;inset:0;z-index:0}
+#marker-layer{position:absolute;inset:0;pointer-events:none;z-index:10}
 
-/* County fill + water features */
-.county-fill{fill:rgba(16,40,72,0.6);stroke:rgba(80,150,220,0.25);stroke-width:1.5}
-.water{fill:rgba(20,60,110,0.5);stroke:none}
-.road{stroke:rgba(80,140,200,0.08);stroke-width:0.5;fill:none}
-
-/* Subtle grid */
-#map-canvas::after{content:'';position:absolute;inset:0;background-image:linear-gradient(rgba(74,158,255,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(74,158,255,0.025) 1px,transparent 1px);background-size:50px 50px;pointer-events:none;z-index:1}
+/* Leaflet customization for dark theme */
+.leaflet-container{background:var(--bg)}
+.leaflet-control-zoom{display:none}
+.leaflet-control-attribution{background:rgba(11,26,46,0.8)!important;color:var(--t3)!important;font-size:9px!important}
+.leaflet-control-attribution a{color:var(--blue)!important}
 
 /* === MARKERS === */
-.marker{position:absolute;transform:translate(-50%,-50%);z-index:10;cursor:pointer;transition:transform 0.15s,z-index 0s}
+.marker{position:absolute;transform:translate(-50%,-50%);z-index:10;cursor:pointer;transition:transform 0.15s,z-index 0s;pointer-events:auto}
 .marker:hover{transform:translate(-50%,-50%) scale(1.35);z-index:20}
 .marker.active{transform:translate(-50%,-50%) scale(1.4);z-index:25}
 .marker-dot{border-radius:50%;position:relative;box-shadow:0 0 10px rgba(0,0,0,0.4);transition:box-shadow 0.2s;border:1.5px solid rgba(255,255,255,0.4)}
@@ -157,7 +157,10 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--t1);overf
 </style>
 </head>
 <body>
-<div id="map-canvas"><div id="map-inner"></div></div>
+<div id="map-canvas">
+  <div id="leaflet-map"></div>
+  <div id="marker-layer"></div>
+</div>
 
 <div id="hover-card">
   <div class="hc-name"></div>
@@ -268,101 +271,42 @@ function sz(p) {
 var DC = { white:'#6ba3d6', asian:'#f0c850', hispanic:'#3dd6c8', black:'#ff6b8a', other:'#a78bfa' };
 
 // ============================
-// MAP PROJECTION
+// LEAFLET MAP SETUP
 // ============================
-var LAT_MIN = 47.15, LAT_MAX = 47.82, LON_MIN = -122.46, LON_MAX = -121.28;
-var PAD = 80;
+var map = L.map('leaflet-map', {
+  center: [47.5, -121.9],
+  zoom: 10,
+  zoomControl: false,
+  attributionControl: true
+});
 
+// Dark-themed map tiles (CartoDB Dark Matter)
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+  subdomains: 'abcd',
+  maxZoom: 19
+}).addTo(map);
+
+// Project lat/lon to screen position using Leaflet
 function project(lat, lon) {
-  var w = window.innerWidth, h = window.innerHeight;
-  return {
-    x: PAD + ((lon - LON_MIN) / (LON_MAX - LON_MIN)) * (w - 2*PAD),
-    y: PAD + ((LAT_MAX - lat) / (LAT_MAX - LAT_MIN)) * (h - 2*PAD)
-  };
-}
-
-// ============================
-// SVG BACKGROUND (county outline + water)
-// ============================
-function drawSVG() {
-  var inner = document.getElementById('map-inner');
-  var existing = inner.querySelector('svg');
-  if (existing) existing.remove();
-
-  var svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
-  svg.style.cssText = 'position:absolute;width:100%;height:100%;pointer-events:none;z-index:0';
-  svg.setAttribute('width', window.innerWidth);
-  svg.setAttribute('height', window.innerHeight);
-
-  // County boundary (simplified)
-  var boundary = [
-    [47.734,-122.435],[47.778,-122.345],[47.78,-122.2],[47.775,-122.1],
-    [47.77,-121.95],[47.75,-121.7],[47.72,-121.45],[47.7,-121.35],
-    [47.6,-121.35],[47.5,-121.7],[47.45,-121.75],[47.35,-121.9],
-    [47.2,-121.93],[47.19,-122.0],[47.24,-122.15],[47.24,-122.35],
-    [47.28,-122.35],[47.32,-122.37],[47.4,-122.37],[47.43,-122.35],
-    [47.47,-122.37],[47.5,-122.36],[47.54,-122.39],[47.6,-122.44],
-    [47.66,-122.43],[47.7,-122.40],[47.734,-122.435]
-  ];
-  var pts = boundary.map(function(c) { var p = project(c[0],c[1]); return p.x+','+p.y; }).join(' ');
-  var poly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
-  poly.setAttribute('points', pts);
-  poly.setAttribute('class','county-fill');
-  svg.appendChild(poly);
-
-  // Lake Washington (simplified)
-  var lakeWA = [
-    [47.72,-122.26],[47.7,-122.24],[47.67,-122.22],[47.64,-122.21],
-    [47.6,-122.22],[47.57,-122.23],[47.55,-122.22],[47.52,-122.21],
-    [47.50,-122.20],[47.50,-122.22],[47.52,-122.24],[47.55,-122.25],
-    [47.57,-122.26],[47.60,-122.26],[47.63,-122.25],[47.66,-122.25],
-    [47.69,-122.26],[47.72,-122.26]
-  ];
-  var lPts = lakeWA.map(function(c) { var p = project(c[0],c[1]); return p.x+','+p.y; }).join(' ');
-  var lake = document.createElementNS('http://www.w3.org/2000/svg','polygon');
-  lake.setAttribute('points', lPts);
-  lake.setAttribute('class','water');
-  svg.appendChild(lake);
-
-  // Lake Sammamish
-  var lakeSam = [
-    [47.62,-122.06],[47.60,-122.05],[47.58,-122.06],[47.56,-122.07],
-    [47.55,-122.08],[47.56,-122.09],[47.58,-122.09],[47.60,-122.08],
-    [47.62,-122.07],[47.62,-122.06]
-  ];
-  var sPts = lakeSam.map(function(c) { var p = project(c[0],c[1]); return p.x+','+p.y; }).join(' ');
-  var lake2 = document.createElementNS('http://www.w3.org/2000/svg','polygon');
-  lake2.setAttribute('points', sPts);
-  lake2.setAttribute('class','water');
-  svg.appendChild(lake2);
-
-  // Puget Sound (western edge)
-  var sound = [
-    [47.78,-122.44],[47.78,-122.50],[47.19,-122.50],[47.19,-122.44],
-    [47.24,-122.42],[47.32,-122.40],[47.40,-122.39],[47.47,-122.40],
-    [47.54,-122.41],[47.60,-122.44],[47.66,-122.44],[47.72,-122.42],[47.78,-122.44]
-  ];
-  var sdPts = sound.map(function(c) { var p = project(c[0],c[1]); return p.x+','+p.y; }).join(' ');
-  var snd = document.createElementNS('http://www.w3.org/2000/svg','polygon');
-  snd.setAttribute('points', sdPts);
-  snd.setAttribute('class','water');
-  svg.appendChild(snd);
-
-  inner.insertBefore(svg, inner.firstChild);
+  var point = map.latLngToContainerPoint([lat, lon]);
+  return { x: point.x, y: point.y };
 }
 
 // ============================
 // MARKERS
 // ============================
-var mapInner = document.getElementById('map-inner');
+var markerLayer = document.getElementById('marker-layer');
 var hoverCard = document.getElementById('hover-card');
 var activeCity = null;
 var activeEl = null;
 var govFilter = 'all';
+var markerElements = [];
 
 function renderMarkers() {
-  var old = mapInner.querySelectorAll('.marker');
+  var old = markerLayer.querySelectorAll('.marker');
   old.forEach(function(m) { m.remove(); });
+  markerElements = [];
   var shown = [];
 
   cities.forEach(function(c, i) {
@@ -381,10 +325,27 @@ function renderMarkers() {
     el.addEventListener('mousemove', function(e) { moveHover(e); });
     el.addEventListener('mouseleave', hideHover);
     el.addEventListener('click', function(e) { e.stopPropagation(); openPanel(c, el); });
-    mapInner.appendChild(el);
+    el._cityData = c;
+    markerLayer.appendChild(el);
+    markerElements.push(el);
   });
   updateFooter(shown);
 }
+
+// Update marker positions when map moves
+function updateMarkerPositions() {
+  markerElements.forEach(function(el) {
+    var c = el._cityData;
+    if (c) {
+      var pos = project(c.lat, c.lon);
+      el.style.left = pos.x + 'px';
+      el.style.top = pos.y + 'px';
+    }
+  });
+}
+
+map.on('move', updateMarkerPositions);
+map.on('zoom', updateMarkerPositions);
 
 function matchGov(c) {
   if (govFilter === 'all') return true;
@@ -520,8 +481,8 @@ function openPanel(c, el) {
 
 // Close panel
 document.getElementById('p-close-btn').addEventListener('click', closePanel);
-document.getElementById('map-canvas').addEventListener('click', function(e) {
-  if (!e.target.closest('.marker')) closePanel();
+map.on('click', function(e) {
+  closePanel();
 });
 function closePanel() {
   document.getElementById('panel').classList.remove('open');
@@ -569,7 +530,7 @@ sIn.addEventListener('input', function() {
         govBtns.forEach(function(b) { b.classList.remove('active'); });
         document.querySelector('[data-gov="all"]').classList.add('active');
         renderMarkers();
-        var markers = mapInner.querySelectorAll('.marker');
+        var markers = markerLayer.querySelectorAll('.marker');
         var targetEl = null;
         markers.forEach(function(mk) {
           if (mk.querySelector('.marker-label') && mk.querySelector('.marker-label').textContent === city.city) targetEl = mk;
@@ -584,52 +545,23 @@ sIn.addEventListener('input', function() {
 sIn.addEventListener('blur', function() { setTimeout(function() { sList.classList.remove('vis'); }, 200); });
 
 // ============================
-// PAN & ZOOM
+// ZOOM CONTROLS (using Leaflet)
 // ============================
-var scale = 1, ox = 0, oy = 0, dragging = false, dx, dy;
-var mc = document.getElementById('map-canvas');
-
-mc.addEventListener('mousedown', function(e) {
-  if (e.target.closest('.marker') || e.target.closest('#panel')) return;
-  dragging = true; mc.classList.add('grabbing');
-  dx = e.clientX - ox; dy = e.clientY - oy;
-});
-document.addEventListener('mousemove', function(e) {
-  if (!dragging) return;
-  ox = e.clientX - dx; oy = e.clientY - dy;
-  applyTx();
-});
-document.addEventListener('mouseup', function() { dragging = false; mc.classList.remove('grabbing'); });
-
-mc.addEventListener('wheel', function(e) {
-  e.preventDefault();
-  var d = e.deltaY > 0 ? 0.9 : 1.1;
-  var ns = Math.min(Math.max(scale * d, 0.5), 5);
-  var rect = mc.getBoundingClientRect();
-  var cx = e.clientX - rect.left, cy = e.clientY - rect.top;
-  ox = cx - (cx - ox) * (ns / scale);
-  oy = cy - (cy - oy) * (ns / scale);
-  scale = ns;
-  applyTx();
-}, { passive: false });
-
-function applyTx() {
-  document.getElementById('map-inner').style.transform = 'translate(' + ox + 'px,' + oy + 'px) scale(' + scale + ')';
-}
-
-document.getElementById('z-in').addEventListener('click', function() { scale = Math.min(scale * 1.3, 5); applyTx(); });
-document.getElementById('z-out').addEventListener('click', function() { scale = Math.max(scale * 0.7, 0.5); applyTx(); });
-document.getElementById('z-rst').addEventListener('click', function() { scale = 1; ox = 0; oy = 0; applyTx(); });
+document.getElementById('z-in').addEventListener('click', function() { map.zoomIn(); });
+document.getElementById('z-out').addEventListener('click', function() { map.zoomOut(); });
+document.getElementById('z-rst').addEventListener('click', function() { map.setView([47.5, -121.9], 10); });
 
 // ============================
 // RESIZE
 // ============================
-window.addEventListener('resize', function() { drawSVG(); renderMarkers(); });
+window.addEventListener('resize', function() {
+  map.invalidateSize();
+  updateMarkerPositions();
+});
 
 // ============================
 // INIT
 // ============================
-drawSVG();
 renderMarkers();
 
 </script>
